@@ -1,0 +1,318 @@
+---
+title: "Notebook Title"
+pdf_document:
+  df_print: kable
+author:
+  name: NPS Inventory and Monitoring Division
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document: null
+  df_print: kable
+  pdf_document: default
+fig_caption: yes
+fontsize: 12pt
+geometry: margin=0.5in
+highlight: haddock
+html_notebook:
+  chunk_output_type: inline
+icml_document:
+  fig_caption: yes
+keep_md: yes
+keep_tex: yes
+latex_engine: pdflatex
+link-citations: yes
+mainfont: Arial
+csl: https://irmadev.nps.gov/Content/ScienceBranch/ecology.txt
+pandoc_args: -standalone
+params:
+  outFolder: D:\IMD\Projects\DataRequests\PackageReviewTools\ExploratoryDataAnalysis_Validation\Datasets\Hydro_MeanDailyFlow_Datasets
+  srcFolder: D:\IMD\Projects\DataRequests\PackageReviewTools\ExploratoryDataAnalysis_Validation\Datasets\Hydro_MeanDailyFlow_Datasets
+smart: no
+always_allow_html: yes
+toc: yes
+toc_depth: 3
+toc_float:
+  collapse: yes
+word_document:
+  toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setWindowTitle('Notebook Title')
+options()
+
+packagesUsed <- c("dplyr", # version: '0.8.5'
+                  "spdplyr", # used only for non-spatial operations
+                  "lubridate", # version: '1.7.4'
+                  "sf", # version: '0.7.4'
+                  "sp", # version: '1.3.1'
+                  "rgdal", # version: '1.4.4'
+                  "purrr", # version: '0.3.2'
+                  "data.table", # vector range comparison (coordinates) # version ''
+                  "ggplot2", # version: '3.2.0'
+                  "readr", # outputting TSV files # version: '1.3.1'
+                  "spatialEco", # point in polygon operations # version: '1.2.0'
+                  "readxl", # reading xlsx files # version: '1.3.1'
+                  "skimr", # dataset summarization # version: '1.0.7'
+                  "tidyr", # pivoting # Version: '1.0.2'
+                  "DataExplorer", # summaries - overview, missing, correlation, and boxplot graphics # Version: '0.8.0'
+                  "summarytools", # summaries - dfSummary() # Version: '0.9.6'
+                  "dlookr" # summaries - correlation plots # Version: '0.3.13'
+                  )
+```
+
+```{r configSetup, echo = FALSE, include = FALSE}
+toInstall <- packagesUsed %in% installed.packages()
+if (length(packagesUsed[!toInstall]) > 0 ) {
+  install.packages(packagesUsed[!toInstall], dep = TRUE)
+}
+libraryInit <- lapply(packagesUsed, library, character.only = TRUE)
+
+knitr::opts_chunk$set(
+  root.dir = params$outFolder,  # from YAML parameter, knitr instead of setwd()
+  echo = FALSE,
+  warnings = FALSE,
+  quiet = TRUE,
+  eval = TRUE,
+  cache = TRUE,
+  cache.comments = FALSE,
+  comment = " ",
+  #   dev = "svg",
+  fig.path = "plots/",
+  tidy.opts = list(width.cutoff = 70),
+  tidy = TRUE
+)
+
+# print(knitr::opts_knit$get())
+
+# flag for whether to use static maps (pdf) or leaflet maps (html)
+htmlflag <- knitr::opts_knit$get("rmarkdown.pandoc.to") != "latex"
+# ("html_document" %in% rmarkdown::all_output_formats(knitr::current_input()))
+pdfflag <- knitr::opts_knit$get("rmarkdown.pandoc.to") == "latex" #
+# ("pdf_document" %in% rmarkdown::all_output_formats(knitr::current_input()))
+wordflag <- knitr::opts_knit$get("rmarkdown.pandoc.to") == "docx" #
+# ("pdf_document" %in% rmarkdown::all_output_formats(knitr::current_input()))
+```
+
+```{r localFunctions, include=FALSE, echo=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+
+# Preview and inspect data structure
+inspectData <- function(dFile) {
+  # Read into dataframe
+  df <- read.csv(dFile)
+  #df <- readr::read_csv(dFile)
+  
+  # Show dataset summary
+  print(paste0("Summary of: ", dFile))
+  show(summary(df))
+  
+  # Show first 10 rows
+  print(paste0("First 10 rows of ", dFile))
+  show(head(df, 10))
+  
+  print(paste0("Rows with data type: ", dFile))
+  show(glimpse((df)))
+  
+  # What are the dimensions?
+  print(paste0("Dimensions of: ", dFile))
+  show(dim(df))
+  
+  return(df)
+  
+}
+
+# Preview and inspect data structure
+inspectDf <- function(df, dFile) {
+  
+  # Show dataset summary
+  print(paste0("\nSummary of: ", dFile))
+  show(summary(df))
+  
+  # Show first 10 rows
+  print(paste0("\nFirst 10 rows of ", dFile))
+  show(head(df, 10))
+  
+  # What are the dimensions?
+  cat(paste0("\nDimensions of: ", dFile))
+  show(dim(df))
+  
+  print(paste0("\nRows with data type: ", dFile))
+  show(glimpse((df)))
+  
+  sapply(df, function(y) sprintf("\nDate range of %s (Date type): %s  ", colnames(y), range(which(is.Date(y)))))
+}
+
+
+# Reveal missing data
+whatsMissing <- function(dataDF) {
+  print("Summary with missing counts by data type:")
+  show(skimr::skim(dataDF))
+}
+
+# Summarize visually
+showDataStructure <- function(dataDF) {
+  DataExplorer::create_report(dataDF)
+}
+
+# Show spatial dataset summary and missing values
+inspectSpatialData <- function(src, dataLayer) {
+  # Using sf, checking for conversion failure (https://cran.r-project.org/web/packages/sf/vignettes/sf3.html)
+  checkLayer <- NULL
+  cat("\n\n-------------------------------------------------------------------------------------------------\n")
+ 
+  srcData <- sf::st_read(dsn = src, layer = dataLayer)
+  #cat(paste0("\nCLASS LENGTH IS: ", as.character(length(class(srcData)))))
+  if (length(class(srcData)) == 1) {
+    # non-spatial object i.e. a table
+    show(summary(srcData))
+    cat("\n")
+    show(skimr::skim(srcData))
+  } else {
+    # spatial object
+    if (class(st_geometry(srcData))[1] == "sfc_GEOMETRY") {
+      # Convert to a Spatial*DataFrame
+      checkLayer <-
+        sf::st_cast(srcData, as.character(st_geometry_type(srcData)[1]))
+      show(summary(checkLayer)) # List geometric and attribute summary, including value frequencies and spatial reference
+      cat("\n")
+      show(skimr::skim(as.data.frame(checkLayer)))
+    } else {
+      checkLayer <-
+        as(sf::st_read(dsn = src, dataLayer, type = 6), 'Spatial')
+      show(summary(checkLayer)) # List geometric and attribute summary, including value frequencies and spatial reference
+      cat("\n")
+      show(skimr::skim(as.data.frame(checkLayer)))
+    }
+  }
+}
+
+# Summarize spatial data visually
+showSpatialDataStructure <- function(dataLayer) {
+  
+}
+
+# Map data
+mapDataset <- function(dataLayer, layerName) {
+  options(sf_max.plot=1)
+  #srcData <- st_geometry(sf::st_read(dsn = fGDB, layer = dataLayer))
+  #st_geometry(sf::st_read(dsn = fGDB, layer = layerX))
+  #plot(dataLayer)
+  png(paste0(layerName, ".png"))
+  plot(dataLayer, main=layerName, graticule = TRUE, key.pos = NULL, axes = TRUE)
+  #show(plot(st_geometry(sf::st_read(dsn = fGDB, layer = dataLayer)), graticule = TRUE, key.pos = NULL, axes = TRUE))
+  dev.off()
+}
+
+mapDatasetWithBasemap <- function(dataLayer, layerName) {
+  # With basemap (ParkTiles) - SLOW for polygon datasets!!
+  # Works OK - not aware of CRS and does not do nice graticules...
+  geomType <- unique(st_geometry_type(dataLayer))
+  cat(geomType)
+  if ("MULTISURFACE" %in% geomType) {
+    layerPlot <- sf::st_cast(dataLayer, "MULTIPOLYGON") #%>% sf::st_collection_extract("MULTIPOLYGON")
+    lp <- leaflet() %>% addTiles(urlTemplate = 'http://api.mapbox.com/v4/nps.397cfb9a,nps.3cf3d4ab,nps.b0add3e6/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoibnBzIiwiYSI6IkdfeS1OY1UifQ.K8Qn5ojTw4RV1GwBlsci-Q&secure=1') %>% fitBounds(
+      as.numeric(st_bbox(layerPlot)[1]),
+      as.numeric(st_bbox(layerPlot)[2]),
+      as.numeric(st_bbox(layerPlot)[3]),
+      as.numeric(st_bbox(layerPlot)[4])
+    ) %>% addPolygons(
+      data = layerPlot,
+      fillOpacity = 0.0,
+      color = "red",
+      weight = 3
+    )
+  } else {
+    layerPlot <- dataLayer
+    lp <- leaflet() %>% addTiles(urlTemplate = 'http://api.mapbox.com/v4/nps.397cfb9a,nps.3cf3d4ab,nps.b0add3e6/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoibnBzIiwiYSI6IkdfeS1OY1UifQ.K8Qn5ojTw4RV1GwBlsci-Q&secure=1') %>% fitBounds(
+      as.numeric(st_bbox(layerPlot)[1]),
+      as.numeric(st_bbox(layerPlot)[2]),
+      as.numeric(st_bbox(layerPlot)[3]),
+      as.numeric(st_bbox(layerPlot)[4])
+    ) %>% addMarkers(
+      lng = st_coordinates(layerPlot)[,1], 
+      lat = st_coordinates(layerPlot)[,2] 
+    ) %>% addGraticule()
+  }
+  show(lp)
+}
+
+```
+
+```{r localVariables, echo = FALSE, include = FALSE}
+# Local variables
+srcFolder <- params$srcFolder
+setwd(srcFolder)
+
+dFile <- "Filename"
+#datasetDf <- data.table::fread(dFile, sep = ",", header = TRUE, na.strings = "NA", encoding = "UTF-8", quote = "\"", keepLeadingZeros = TRUE, stringsAsFactors = FALSE)
+
+#Read in source dataset
+# sourceTypes <- c("*.\\.(txt|csv)")
+# 
+# lapply(sourceTypes, function(sourceFormat) {
+#   dFiles <- list.files(srcFolder, recursive = FALSE, pattern = sourceFormat)
+#   cat(dFiles)
+# # Read in dataset(s)
+#   lapply(dFiles, function(dFile){
+#     datasetDf <- data.table::fread(dFile, sep = ",", header = TRUE, na.strings = "NA", encoding = "UTF-8", quote = "\"", keepLeadingZeros = TRUE, stringsAsFactors = FALSE)
+#   })
+# })
+
+```
+
+## Overview
+Notebook purpose and outputs
+
+* dataset value ranges, data typing, distributions, and completeness
+* for spatial datasets, geometric integrity, spatial reference, and spatial extent checks
+
+### Source file: <https://irma.nps.gov/DataStore/Reference/Profile/XXXXXXX>
+
+### Dataset -  summary
+``` {r datasetSummarySimple, echo=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+
+#inspectDf(datasetDf, dFile)
+#summary(datasetDf)
+
+```
+
+### Dataset -  structural summary
+``` {r datasetSummary, echo=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+
+#str(datasetDf)
+
+```
+
+### Dataset - value and missing record summary
+``` {r datasetSummaryValues,echo=TRUE, message=FALSE, warning=FALSE, error=FALSE, render = knitr::normal_print}
+
+#show(skimr::skim(datasetDf))
+
+```
+
+
+### Dataset - graphic summary
+``` {r datasetSummaryGraphics, echo=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+# For HTML rendering; see https://cran.r-project.org/web/packages/summarytools/vignettes/Recommendations-rmarkdown.html#dfsummary
+# print(summarytools::dfSummary(datasetDf, plain.ascii = FALSE, style = 'grid', graph.magnif = 0.75, valid.col = FALSE, headings = FALSE), max.tbl.width = 600, method = 'render')
+# # For non-HTML rendering:
+# #summarytools::dfSummary(datasetDf, plain.ascii = FALSE, style = 'grid', graph.magnif = 0.75, valid.col = FALSE, tmp.img.dir = "./img")
+# 
+# DataExplorer::plot_intro(datasetDf)
+# 
+# DataExplorer::plot_missing(datasetDf)
+# 
+# DataExplorer::plot_correlation(datasetDf, type = "c")
+
+
+```
+
+###Session information
+``` {r sessionInfo, echo=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+print(sessionInfo())
+```
+
+
+
+
