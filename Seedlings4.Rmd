@@ -1,0 +1,251 @@
+---
+title: "MORU Tree Seedling Data Exploration part 4"
+author: "Tom 2"
+date: "February 26, 2018"
+output:
+  html_document:
+    df_print: kable
+    fig_caption: yes
+    highlight: haddock
+    keep_md: yes
+    smart: no
+    theme: journal
+    toc: yes
+  pdf_document:
+    toc: yes
+    highlight: haddock
+  html_notebook:
+    chunk_output_type: inline
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+
+# packages I'll use
+pkgList <- c("MASS", "nlme",
+             "lme4", "pbkrtest", "lmerTest", "merTools",
+             "dataMaid",
+             "RVAideMemoire",  # for overdisp.glmer
+             "MCMCglmm", "hglm", "VGAM",
+             "lubridate", "plyr",
+             "ggplot2"
+            )
+inst <- pkgList %in% installed.packages()
+if (length(pkgList[!inst]) > 0) {
+   install.packages(pkgList[!inst], dep=TRUE, 
+                    repos="https://cloud.r-project.org") 
+   }
+lapply(pkgList, library, character.only = TRUE, quietly=TRUE)
+
+
+baseDir <- "e:/NGPNseedlings"
+
+knitr::opts_knit$set(root.dir = baseDir)
+setwd(baseDir)
+#knitr::opts_chunk$set(echo = TRUE)
+```
+# Introduction
+
+This notebook is the fourth overall pass at exploring Isabel Ashton & NGPN's tree seedling data from MORU.  The overall goal is to set up one or more appropriate generalized linear mixed models for comparing trends over time, and for comparing trends between treatments (thinning).  This version actually explores generalized linear mixed models for the seedling data that were explored & cleaned in the first 3 passes.
+
+Just for kicks, it will produce a "Codebook" for this dataset
+
+
+```{r ReloadData}
+load("SeedlingsForAnalyses.Rdata")
+# show how many plots for each species
+table(SpPlots$Species.Symbol)
+dataMaid::makeCodebook(seedlings, output = "html", replace = TRUE)
+```
+Now, for analyses, we can subset seedlings by a species, match-merge back the BA and treatment by MacroPlot.Name and Year, and let it rip.
+
+The first step is to choose a species of interest and subset to those data alone.  [I have a trick for possibly dealing with total seedlings I may explore later, but first, trends by individual species.]  You can choose any of the species occurring in 12 or more plots in the above table, plug that value in the Sp <- "YourSpeciesHere" # test species line in the next code chunk, and run the figures and analyses for that species.
+
+```{r SeedlingPlots}
+
+# First choose a species of interest
+# Sp <- "PIPO"  # test species
+Sp <- "AMAL2"  # test species
+
+SpData <- merge(seedlings[seedlings$Species.Symbol==Sp,],
+                plotinfo,
+                by=c("MacroPlot.Name","Year"),all=TRUE)
+# sanity check that number of observations == 212
+nrow(SpData)
+```
+
+Next, center the values for fitting linear models.  Otherwise the intercepts are extrapolated back to 0 c.e., which is both meaningless and has rather wide confidence intervals!  For dates (Years), even recentering requires a bit of thought.  My usual inclination is to not _center_ the Year values by subtracting off the mean, especially with unbalanced years by sites, but rather to subtract off the minimum (first) year, so that the intercept values are easily interpertable as estimates at the first time.  However, that produces a negative correlation (covariance) between the random effects of intercept and slope (time), especially when there are few revisits to each site.  In this case, because thinning treatments were applied in different years before and after 2010 to different MacroPlots, I don't see anything particularly magic about estimates of seedlings in 2010 unless we treat that as the original crop, and treat year to year effects as birth (+1 yr survival) and death changes.  So, I generate both versions of rescaled Year: Yr with 0 at the first year, and Yr2 with 0 at the mean year, but will use the fully centered Yr2 in these analyses.  BasalArea values are easy: they are centered because extrapolation to BA=0 or even the minimum BA isn't informative.  Intercepts when BA is included in the model are now at the average value of BA. 
+
+```{r Rescale}
+SpData$Yr <- SpData$Year - min(SpData$Year)
+SpData$Yr2 <- SpData$Year - mean(SpData$Year)
+# same for BA center on mean BasalArea
+SpData$BA <- SpData$BasalArea_sq.m.ha - mean(SpData$BasalArea_sq.m.ha)
+
+```
+Recall that except for PIPO, most species never occur in some macroplots.  Including such plots as subjects in repeated measures style mixed models will fail, as there is no slope or trend estimate possible for such subjects.  Ecologically, those plots not having any seedlings of that species can be due to no nearby seed sources, which is probably not of interest in this monitoring.  So, in addition to subsetting by species, for tests of temporal trends we need to remove macroplots that never have any seedlings of that species, but retain the 0s for years without that species in a macroplot if that species occurred in that macroplot in other years.
+
+```{r dropEmptyPlots}
+flags <- SpPlots$MacroPlot.Name[SpPlots$Species.Symbol==Sp]
+SpPlData <- SpData[SpData$MacroPlot.Name%in%flags,]
+```
+
+# Graphs
+```{r DensityByTimeGraph}
+# first a nice graph
+SeedlingFig <- ggplot(data=SpData,aes(x=Year, y=Density_ha, group=MacroPlot.Name)) +
+               geom_line(aes(color=ThinTrt),size=1) +
+               geom_point(aes(color=ThinTrt),size=2) + # added to show data vs skipped years
+   #            scale_color_manual(values = c("red", "blue", "green")) +
+               ggtitle(paste(Sp,"Seedlings over Time by Plot")) +
+               ylab("Estimated Density per ha") +
+               xlab("Year") +
+               scale_colour_brewer(palette = "Set1")
+print(SeedlingFig)
+
+```
+[Doh!  MORU_PCM_056 has a buttload of PIPO seedlings! Guessing that PIPO is Pinus ponderosa, and recalling that young of year or fresh germinants are not counted, that's a carpet of ~20 PIPO seedlings per m^2^.  That's possible, but unlikely and an outlier.  So, for PIPO, let's drop that plot for that year for now, pending double-checking of those data.]
+AMAL2 and other species I've looked at don't have this problem.
+```{r DropOutlier}
+if (Sp=="PIPO") SpData <- SpData[SpData$MacroPlot.Name!="MORU_PCM_056"&SpData$Year!=2011,]
+```
+
+
+One more figure before the GLMM: how do seedling densities vary with BA and treatment?
+```{r BaTrtFig}
+BaTrtFig <- ggplot(data=SpData,
+                   aes(x=BasalArea_sq.m.ha, y=Density_ha, 
+                       color=ThinTrt, group=MacroPlot.Name)) +
+            geom_line(aes(size=as.factor(Year))) + scale_size_manual(values=0.3*(1:8)) +
+#            geom_point(size=2) +
+#            geom_line() + 
+            geom_point(aes(size=as.factor(Year))) +
+            ylab("Estimated Seedling Density per ha") +
+            ggtitle(paste(Sp,"Seedling Density as a Function of Tree basal Area by Plot")) +
+            scale_colour_brewer(palette = "Set1")
+            
+print(BaTrtFig)
+```
+OK, for most species I've looked at I don't see any obvious pattern with tree BA.  That doesn't mean that there isn't a relationship, it means that any relationship doesn't jump off the page.
+
+# The GLMM Tests, Already, Tom!
+
+Yes, we're finally ready for what Tom was originally asked for suggestions on!  We can only hope that it turns out to be worth the wait.
+
+The form of the analysis attempts to follow the form of the sampling or data generation process.  
+
+MacroPlots are taken to be random subjects.  Thinning treatment is taken to be a between-subject categorical effect that is constant over time.  BasalArea is taken to be a between-subject, time-varying covariate.  A linear (fixed) effect of year is taken to be the simplest expression of a trend over time.  Whether temporal trends differ among thinning treatments is a reasonable question, addressed as a Year by treatment interaction.  Time-varying Basal Area is difficult to conceptualize as affecting trends in seedling counts over time.  [If Basal Area was a constant over time property of a MacroPlot, then a BA by Year interaction would make sense in terms of addressing whether trends in seedling counts differ systematically with canopy closure or stand age as reflected in summed BA.]  At the same time, an interaction between a time-varying covariate and time is going to be very difficult if not impossible to fit numerically.
+
+Two forms of random effects are required.  MacroPlots are random subjects.  They need random intercepts, and the Piepho & Ogutu (2002) approach is to allow each macriplot to have its own estimated temporal slope as well.  By including both a fixed effect of Year and random effects, the test for overall temporal trends becomes questions about the distribution of the slopes across MacroPlots.  Is the mean of that distribution of trends significantly different from 0?  Does the distribution of slopes differ between MacroPlots grouped by treatments?  The second form of random effect is random year to year fluctuations, in the model as (1|as.factor(Yr2)).  This term helps account for the fact that a particularly wet year or dry year or warm year has a highly correlated affect across all MacroPlots.  In simulations of statistical models to detect trends, omitting this term can produce up to 30-40% false positives or confidence intervals that are higher than and do not include the true value of the trend.  In addition, some of the MacroPlots are censused only in 2010, 2012, and 2016, while others are censused in combinations of 2011, 2013, 2014, 2015, and 2017 as well.  If, for example, 2012 was a very good year for seedling abundances, not accounting for the year to year fluctuations correlated across plots would end up giving the 3 visits only plots higher intercepts and potentially confound their estimated temporal slopes.
+
+The response variable is the count of non-young-of-year seedling in the plot, so the initial error distribution family will be Poisson with the canonical log-link.  Because not all species were counted on the same area of every plot and year, an offset term is needed to account for that effect.  An offset in generalized linear models is a variable that enters the model with a fixed coefficient, usually 1. The textbook case (e.g., McCullough & Nelder 1989) is ship-days or person-days at risk of an accident for Poisson counts of accidents per year.  I used an offset term for quadrat size for forest litter herps in the Whitfield et al. 2007 PNAS paper. Seedling plots were 10m radius, so the area of a full seedling plot is 100\*pi.  The SubFrac variable in the data records what fraction of a plot the seedlings of that species were counted on.  So, the values of the offset variable are 100\*pi\*SubFrac.
+
+Finally, back in part 3 I set up the categorical ThinTrt as an _ordered_ factor: 2009Thin, 2011Thin, none.  That gets the legends in a reasonable order, which is why I did it.  However, the default contrasts for ordered factors are polynomial: linear, quadratic, etc.  With 3 levels of the factor, there are 2 possible contrasts, and linear then quadratic are not the most informative or appropriate comparisons.  A more natural pair of comparisons treat no thinning as a control or baseline, with one term comparing 2009Thin to no thinning and the other term comparing 2011Thin to no thinning.  Because the baseline is the third level in the ordered factor instead of the first, the contrast is "contr.SAS" instead of "contr.treatment".  This does not matter for the 2df tests of treatment, but it does change the individual terms in the summary ANOVA table.
+
+Putting it all together, the full model would then be:
+```{r FullModel, eval=FALSE}
+mod <- glmer(sum_Count ~ Yr2 + ThinTrt + Yr2:ThinTrt +
+                         BA + 
+                         (1|as.factor(Yr2)) + 
+                         (1 + Yr2|MacroPlot.Name), 
+             family=poisson, offset=Off,
+             contrasts=list(ThinTrt=contr.SAS),
+             data=SpPlData)
+```
+Unfortunately, that model can't be fit from the data so far as it fails to converge.  Ben Bolker's GLMM FAQ http://bbolker.github.io/mixedmodels-misc/glmmFAQ.html#troubleshooting and the lme4 man page for convergence http://finzi.psych.upenn.edu/R/library/lme4/html/convergence.html give suggestions for how to fit a valid model with (marginal) convergence issues.  Examination of the seedlings over time plot above (for AMAL2, other species may be different) indicates that a year by thinning treatment is not worth testing for.  Therefore, I will simplify the model by dropping that interaction term.  To show the effect of standardizing Year to the mean versus the first year, the new full model will be run both ways:
+
+```{r GLMMmod0, eval=TRUE}
+cat("Full Model Temporal Trends for",Sp,"\n")
+mod0 <- glmer(sum_Count ~ Yr2 + ThinTrt + 
+                          BA + 
+                          (1|as.factor(Yr2)) + 
+                          (1 + Yr2|MacroPlot.Name), 
+             family=poisson, offset=Off,
+             contrasts=list(ThinTrt=contr.SAS),
+             data=SpPlData)
+summary(mod0)
+overdisp.glmer(mod0)   # test for overdispersion
+cat("\n\n\nRepeat with intercept at 2010 not mean Year\n")
+mod0a <- glmer(sum_Count ~ Yr + ThinTrt + 
+                          BA + 
+                          (1|as.factor(Yr)) + 
+                          (1 + Yr|MacroPlot.Name), 
+             family=poisson, offset=Off,
+             contrasts=list(ThinTrt=contr.SAS),
+             data=SpPlData)
+summary(mod0a)
+overdisp.glmer(mod0a)   # test for overdispersion
+
+```
+The full model is a reasonable or plausible or not too terrible fit with Poisson, with overdispersion lambda= `r overdisp.glmer(mod0)`.
+Note the difference in the Random Effects Corr column between Intercept and Yr: in the centered Yr version it is +.38 while in the 2010 = Yr 0 version it is -.49.
+
+The most reliable test of whether BA is a significant predictor of seedling count is to fit the same model as above but drop the BA fixed effect, then compare the two nested models via likelihood ratio tests or parametric bootstrapping.  The "Wald Z-Value" tests in the summary above are crude at best.  Their biggest utility, however, is to point out that the p.value for BA might be very small, so the parametric bootstrap approach will need to be run many times.  The problem is that PBmodcomp The p.value estimated by PBmodcomp is 1 plus the number of simulations with larger values ("Extremes"), divided by the number of runs used, so to get p.value resolution below 0.01, more than 100 simulations that successfully converge are needed.  We'll start out with nsim=500.  Note that nsim=500 requires 2322 seconds (38.7 minutes).  Also, each simulation that doesn't converge generates a warning, so these code chunks have warning printing suppressed via warning=FALSE.
+
+```{r GLMMmod1, eval=TRUE, warning=FALSE}
+mod1 <- glmer(sum_Count ~ Yr2 + ThinTrt + 
+                          (1|as.factor(Yr2)) + 
+                          (1 + Yr2|MacroPlot.Name), 
+             family=poisson, offset=Off,
+             contrasts=list(ThinTrt=contr.SAS),
+             data=SpPlData)
+overdisp.glmer(mod1)   # test for overdispersion
+cat("Test for Significance of BA\n")
+anova(mod0,mod1)
+PBmodcomp(mod0,mod1,nsim=500)
+
+```
+
+So, for AMAL2, there is a significant positive association of higher Basal Area predicting more seedlings.  Note that both approaches to the significance test are significant, but they differ substantially.  In general, the LRT approach (chis-square distribution with df as the difference in df ebtween the models) is only asymptotically valid for generalized linear mixed models, as the sample size approaches infinity.  For small and very small sample sizes, the parametric bootstrap approach to significance testing is more reliable.  However, for these data, roughly half of the parametric bootstrap sample tests failed to converge ("Used samples" / "Requested samples"), so the PBmodcomp estimated significance also has some possible issues.  
+
+The same process can be used on thinning treatment, fitting a model without ThinTrt, then comparing it to the full model.
+
+```{r GLMMmod2, eval=TRUE, warning=FALSE}
+mod2 <- glmer(sum_Count ~ Yr2 + 
+                         BA + 
+                         (1|as.factor(Yr2)) + 
+                         (1 + Yr2|MacroPlot.Name), 
+             family=poisson, offset=Off,
+             data=SpPlData)
+overdisp.glmer(mod2)   # test for overdispersion
+anova(mod0,mod2)
+PBmodcomp(mod0, mod2, nsim=500)
+```
+So, for AMAL2, there is no evidence for an effect of thinning treatment on seedling density.
+
+One final model drops a fixed effect of Year, and tests it against a model with only ThinTrt and BA. [One might want to test a model with main effects of Year and BA against one with just BA, omitting ThinTrt based on the above tests.]  This model comparison tests for a trend across years in seedling counts independent of that predicted by changes in BA across years. 
+```{r GLMMmod3, eval=TRUE, warning=FALSE}
+mod3 <- glmer(sum_Count ~ ThinTrt + 
+                         BA + 
+                         (1|as.factor(Yr2)) + 
+                         (1 + Yr2|MacroPlot.Name), 
+             family=poisson, offset=Off,
+             contrasts=list(ThinTrt=contr.SAS),
+             data=SpPlData)
+overdisp.glmer(mod3)   # test for overdispersion
+anova(mod0,mod3)
+PBmodcomp(mod0, mod3, nsim=200)
+```
+So, for AMAL2, there is not strong evidence for a linear trend over years in the counts of seedlings on repeatedly visited plots.
+
+
+I leave it as an exercise for the reader (Isabel) to rerun most of this code for the other species that occur at least once in at least 1-12 MacroPlots, after checking to see if they occur in plots in different thinning treatments.
+
+\pagebreak
+#References
+Bolker, B. 2017.  GLMM FAQ.  http://bbolker.github.io/mixedmodels-misc/glmmFAQ.html
+
+McCullagh, P., and J. A. Nelder. 1989. Generalized Linear Models. London: Chapman; Hall.
+
+Piepho, H.P. and Ogutu, J.O., 2002. A simple mixed model for trend analysis in wildlife populations. Journal of agricultural, biological, and environmental statistics, 7(3), p.350-360.
+
+Stroup, W.W., 2012. Generalized linear mixed models: modern concepts, methods and applications. CRC press.
+
+Whitfield, S.M., Bell, K.E., Philippi, T., Sasa, M., Bola?os, F., Chaves, G., Savage, J.M. and Donnelly, M.A., 2007. Amphibian and reptile declines over 35 years at La Selva, Costa Rica. Proceedings of the National Academy of Sciences, 104(20), pp.8352-8356.  https://doi.org/10.1073/pnas.0611256104
+
+
+\pagebreak
+# R Code Listing
+```{r Listing, ref.label=knitr::all_labels() ,echo=TRUE, eval=FALSE}
+```

@@ -1,0 +1,29 @@
+---
+title: "EDA2_Pairwise"
+author: "TP"
+date: "4/23/2020"
+output: html_document
+---
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Introduction
+
+Bivariate
+
+## Examples
+
+
+
+
+
+## Packages
+
+
+## References
+

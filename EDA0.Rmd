@@ -1,0 +1,232 @@
+---
+title: "EDA0_Dataset_description"
+author: "TP"
+date: "4/23/2020"
+output:
+  html_document:
+    df_print: kable 
+    fig_caption: yes
+    highlight: haddock
+    keep_md: yes
+    smart: no
+    toc: yes
+    toc_float:
+      collapse: true
+    toc_depth: 3
+
+---
+
+
+
+
+```{r setup, include=FALSE}
+pkgList <- c(
+            "RODBC", "DBI", "readxl",
+            "lubridate", "plyr",
+            "ggplot2", 
+            "dataMaid",
+            "skimr",
+            "explore",
+            "DataExplorer",
+            "exploreR",
+            "plotrr",
+            "skimr",
+            "dlookr"
+            )
+inst <- pkgList %in% installed.packages()
+if (length(pkgList[!inst]) > 0) {
+   install.packages(pkgList[!inst], dep = TRUE,
+                    repos = "https://cloud.r-project.org")
+   }
+lapply(pkgList, library, character.only = TRUE, quietly = TRUE)
+
+
+knitr::opts_chunk$set(
+   fig.path = "plots/",   echo = TRUE,
+   comment = "",
+   echo = TRUE,
+   warning = FALSE,
+   message = FALSE,
+   cache = FALSE,
+   results = "hold",   # single results block per code chunk
+   #   dev = "svg",
+   tidy.opts = list(width.cutoff = 60),
+   tidy = TRUE
+   )
+# if ggplot, update theme to default to centered titles
+if ("ggplot2" %in% .packages()) {
+   theme_update(plot.title = element_text(hjust = 0.5))
+}
+
+
+
+```
+
+## Introduction
+
+The simplest start to data exploration is a summary or overview of the dataset.  In the old days of data on magnetic tapes or cards, this summary (often called a "codebook" for how values were coded numerically) was printed out as the essential guide to coding analyses.  While now we can often (not always) open another window and browse our data, this simple summary of data type, missing values, range, and distribution, performed variable by variable, is still a useful first step to working with a dataset.
+
+Because it is useful, many others have performed it in R (and python), wrapped their functions up as packages, and made it very easy for anyone to perform this on every new dataset.
+
+If I were publishing datasets, I would be kind to any future users of my dataset and include this summary with the dataset, either in the data package or as an appendix to the data publication report.  That is not a requirement; that is not likely to become a requirement; channeling Martha Stewart: "It's a good thing" to do.
+
+Note that this is similar to something that Lisa Nelson and Simon Kingston were working on for the Data Managers' 2020 training.
+
+Finally, note that in most cases I'm including the package as well as the function: *package::function()*.  This is because for this example, I loaded multiple packages which may or may not have conflicting function names.
+
+
+### Packages
+
+There are many R packages for this dataset description.  Different users have slightly different needs or interests or just preferences, as well as different datasets.  Staniak and Biecek have a nice review "The Landscape of R Packages for Automated Exploratory Data Analysis" in The R Journal 11:2 (2019) [Link](https://journal.r-project.org/archive/2019/RJ-2019-033/index.html) (pdf icon to the right of the title).
+
+DataExplorer
+[https://cloud.r-project.org/web/packages/DataExplorer/index.html](https://cloud.r-project.org/web/packages/DataExplorer/index.html)
+[https://cloud.r-project.org/web/packages/DataExplorer/vignettes/dataexplorer-intro.html](https://cloud.r-project.org/web/packages/DataExplorer/vignettes/dataexplorer-intro.html)
+
+dataMaid  (data reports and codebooks)
+[https://cloud.r-project.org/web/packages/dataMaid/index.html](https://cloud.r-project.org/web/packages/dataMaid/index.html)
+[https://www.jstatsoft.org/index.php/jss/article/view/v090i06/v90i06.pdf](https://www.jstatsoft.org/index.php/jss/article/view/v090i06/v90i06.pdf)
+[https://sandsynligvis.dk/2017/08/21/datamaid-your-personal-assistant-for-cleaning-up-the-data-cleaning-process/](https://sandsynligvis.dk/2017/08/21/datamaid-your-personal-assistant-for-cleaning-up-the-data-cleaning-process/)
+[https://sandsynligvis.dk/2018/03/03/generating-codebooks-in-r/](https://sandsynligvis.dk/2018/03/03/generating-codebooks-in-r/)
+
+dlookr
+[https://cran.r-project.org/web/packages/dlookr/index.html](https://cran.r-project.org/web/packages/dlookr/index.html)
+[https://cran.r-project.org/web/packages/dlookr/vignettes/EDA.html](https://cran.r-project.org/web/packages/dlookr/vignettes/EDA.html)
+
+explore
+[https://cloud.r-project.org/web/packages/explore/index.html](https://cloud.r-project.org/web/packages/explore/index.html)
+[https://cloud.r-project.org/web/packages/explore/vignettes/explore.html](https://cloud.r-project.org/web/packages/explore/vignettes/explore.html)
+
+
+skimr
+[https://cloud.r-project.org/web/packages/skimr/index.html](https://cloud.r-project.org/web/packages/skimr/index.html)
+[https://cloud.r-project.org/web/packages/skimr/vignettes/skimr.html](https://cloud.r-project.org/web/packages/skimr/vignettes/skimr.html)
+
+
+
+
+Initially, this page will provide examples from the dataMaid, DataExplorer, and explore packages, not because they are the best for your needs or mine, but because I've used them.  If you try other packages and find one you like, please comment on this page or in the EDA Teams wiki.
+
+
+
+## Examples
+
+You should be able to run these examples on your own data.  If you do not already know how to get your dataset into R, you can refer to the [Data I/O](https://doimspp.sharepoint.com/sites/nps-in2-imd-r4nr/SitePages/r-topics_data-i-o.aspx) and [Relational Databases](https://doimspp.sharepoint.com/sites/nps-in2-imd-r4nr/SitePages/r-topics_data-i-o_relational-databases.aspx) pages on my in-migration [IMD R for Natural Resources](https://doimspp.sharepoint.com/sites/nps-in2-imd-r4nr/SitePages/home.aspx) pages.
+
+### Grab Dataset
+
+These examples use a plots database from the Vegetation Mapping Inventory, as most data from my collaborations with networks might include sensitive records.
+
+
+```{r grabGUMO}
+
+mdb <- odbcConnectAccess2007("gumodata.accdb")
+df1 <- sqlFetch(mdb, "tPlotEvents")
+df2 <- 
+close(mdb)
+
+```
+
+### dataMaid
+
+The dataMaid package has two main functions for reporting on datasets: **makeCodebook** and **makeDataReport**.  makeCodebook is a wrapper for makeDataReport, with defaults for descriptions of all variables and a slightly nicer layout of the rendered results.  makeCodebook accepts and passes along all parameters of makeDataReport.  
+
+Both functions have 3 modes of operation: summarize, visualize, and check.  By default all 3 are performed.  You can supply your own set of checks for each variable.  
+
+By default makeCodebook produces a Rmd or pdf file of the codebook, depending on whether it ddiscoveres an installation of a TeX engine.  You might want to set **output = "html"** (or "word" I suppose), or set **render = FALSE** to get just the Rmd output.
+
+The vignette for dataMaid is about advanced customization.  Instead, the JSS article on it is the best user guide.
+[https://doi.org/10.18637/jss.v090.i06](https://doi.org/10.18637/jss.v090.i06)
+
+
+
+```{r dataMaid_example}
+# minimum needed:
+# dataMaid::makeCodebook(df1)
+
+# output & report title
+dataMaid::makeCodebook(df1, output = "html", file = "dataMaid_GUMO_CB.Rmd", replace = TRUE,
+                       reportTitle = "Codebook Dataset Description GUMO tPlotEvents")
+# replace = TRUE so I can repeatedly test render this page from the Rmd without file exists error.
+
+dataMaid::makeDataReport(df1, output = "html", file = "dataMaid_GUMO_DR.Rmd", replace = TRUE,
+                         reportTitle = "DataReport Dataset Description GUMO tPlotEvents")
+
+```
+Note that these calls produce both Rmd and html versions of the output.  The html output files are available as [dataMaid_GUMO_CB.html](dataMaid_GUMO_CB.html) and [dataMaid_GUMO_DR.html](dataMaid_GUMO_DR.html)
+
+One minor annoyance or shortcoming is that dataMaid does not support POSIXct for date-time values.
+
+
+### explore 
+
+The primary use of the explore package is interactive data exploration.  Calling the core function with a dataset opens up a shiny app explore(df1) or df1 %>% explore().  Subsidiary function are meant to be used as components of your own shiny app.  Thus, this package is more aimed at the next phases of EDA than just simple dataset description.
+
+However, it also produces an automatic report via its report() function.  Note that both output_file and output_dir must be specified; neither has a default value.  The format of the rendered report is html.  And note the other two possible parameters (target & split) to the report() function allow reporting by groups within the dataset. 
+
+This package is meant to be used with the tidyverse, so much of the documentation is in terms of magrittr pipes.  But, any such function works the same if the first parameter is the data it is being applied to.
+
+There are two vignettes for the explore package:
+[https://cran.r-project.org/web/packages/explore/vignettes/explore.html](https://cran.r-project.org/web/packages/explore/vignettes/explore.html)
+
+[https://cran.r-project.org/web/packages/explore/vignettes/explore_mtcars.html](https://cran.r-project.org/web/packages/explore/vignettes/explore_mtcars.html)
+
+
+
+```{r explore_example, message = FALSE, warning = FALSE}
+# if you want to use shiny
+# explore(df1)
+# df1 %>% explore()
+
+# default report 
+explore::report(df1, output_file = "explore_GUMO.html", output_dir = ".")
+
+```
+The resulting html file is [here](explore_GUMO.html).
+
+
+
+### DataExplorer
+
+The DataExplorer package is constructed as a set of useful functions for individual tasks.  But, it includes a wrapper function *create_report()* to generate a dataset report, with both reasonable defaults and a separate function *configure_report()* to customize what is included in the report.  The default rendered format is html with the yeti theme; documentation is sparse on other formats or even themes supported. 
+
+
+[https://cran.r-project.org/web/packages/DataExplorer/vignettes/dataexplorer-intro.htm](https://cran.r-project.org/web/packages/DataExplorer/vignettes/dataexplorer-intro.htm)
+
+```{r DataExplorer_example}
+DataExplorer::create_report(df1, output_file = "DataExplorer_GUMO.html")
+
+```
+
+The resulting report is [here](DataExplorer_GUMO.html)
+
+
+Note that even with chunk options warning = FALSE, message = FALSE, I can't suppress the knitr::render messages generated by either explore::report()  or DataExplorer::create_report().  Bother.
+
+##
+
+
+
+## References
+
+Petersen AH, Ekstrøm CT (2019). “dataMaid: Your Assistant for Documenting Supervised Data Quality Screening in R.” _Journal of Statistical Software_, *90*(6), 1-38. doi: 10.18637/jss.v090.i06 ( https://doi.org/10.18637/jss.v090.i06).
+
+
+The Landscape of R Packages for Automated Exploratory Data Analysis PDF download
+Mateusz Staniak and Przemysław Biecek , The R Journal (2019) 11:2, pages 347-369.
+
+
+\pagebreak
+
+## Appendix 1 Code Listing
+
+```{r Listing, ref.label=knitr::all_labels() ,echo=TRUE, eval=FALSE}
+```
+
+\pagebreak
+
+## Appendix 2 R sessionInfo
+
+```{r app2}
+sessionInfo()
+```

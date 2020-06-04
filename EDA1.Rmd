@@ -1,0 +1,451 @@
+---
+title: "EDA1: Groups and Slices"
+author: "Tom 2 & Friends"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: kable 
+    fig_caption: yes
+    theme: paper
+    highlight: haddock
+    keep_md: yes
+    smart: no
+    toc: yes
+    toc_float:
+      collapse: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE, echo = FALSE}
+options(stringsAsFactors = FALSE,
+        timeout = 600,
+        warn = 1 # print warnings when the occur
+        )
+
+
+pkgList <- c("dplyr",
+             "ggplot2",
+             "VIM", # for wine & breast cancer datasets with missing values
+             "rmdformats",   # templates including automatic ToC,
+             "knitr",
+             "datasets",
+             "MASS"  # for geyser
+            )
+inst <- pkgList %in% installed.packages()
+if (length(pkgList[!inst]) > 0) install.packages(pkgList[!inst],dep = TRUE, repos = "https://cloud.r-project.org/")
+junk <- lapply(pkgList, require, quietly = TRUE, character.only = TRUE)
+
+knitr::opts_chunk$set(comment = " ",
+                      echo = TRUE,
+                      collapse = TRUE,
+                      tidy.opts = list(width.cutoff = 72),
+                      tidy = FALSE
+                      )
+# if ggplot, update theme to default to centered titles
+if ("ggplot2" %in% installed.packages()) {
+   theme_update(plot.title = element_text(hjust = 0.5))
+}
+# load seedlings data
+load("SeedlingsForAnalyses.Rdata")
+
+
+```
+
+## Introduction
+
+The dataset description page was something of a cheat.  It simply used some packages that automate description of each variable in a dataset, without considering the properties of the various summarizations or visualizations.  Because this EDA module compares variable distributions among slices or groups, we have to start by considering the various approaches such as boxplots and histograms.  The majority of that content is on a separate Visualizations page.  [Currently https://doimspp.sharepoint.com/sites/EDA_Workshops/Shared%20Documents/General/Visualization_Distributions.html because inside.nps.gov Sharepoint Sites are set up wrong.] Then, we'll consider how to present those visualizations by groups, whether levels of a factor like site, or subsets of a continuous variable.
+
+
+## Missing Values
+
+Missing Values
+Overall missing values are simple to tabulate with the is.na() function:
+
+```{r m0} #, eval = FALSE}
+# table(is.na(dataset$Var))
+table(is.na(bcancer))
+
+```
+
+Even a low number of missing values can be problematic is they are mostly in the same site, year, season, or other grouping of interest.  The above immediately extends to grouping:
+
+```{r m1, eval = FALSE}
+with(dataset, table(SiteID, is.na(Var)))
+with(dataset, table(SiteID, Year, is.na(Var)))
+```
+
+
+Here are a few simple summaries from the wine dataset in package VIM:
+
+```{r m1a, collapse = TRUE}
+# 
+str(wine)
+cat("\n\n\nHow many missing values in each variable?\n")
+colSums(is.na(wine))
+cat("\n\n\nHow many missing values for price for each variety?\n")
+with(wine, table(variety_main, is.na(price)))
+
+
+```
+
+Note that is a table not a graph.  I tend to use a table because in good datasets, there are 0 or very few missing values, so a bar graph won't show easily show both the total number of observations and the number of missing observations.  But if there are more than a few percent missing values, a stacked bar chart may be appropriate:
+
+```{r M2, eval = FALSE}
+tmp <- data.frame(with(dataset, table(SiteID, is.na(Var))))
+names(tmp) <- c("SiteID", "missing", "Freq")
+mfig <- ggplot(tmp, aes(x = SiteID, y = Freq, fill = missing)) +
+        geom_bar(position = "stack", stat = "identity")
+```
+
+With those data having <5% missing values, the stacked barchart won't be too informative, but your data may have more missing values:
+
+```{r M2a}
+tmp <- data.frame(with(wine, table(variety_main, is.na(price))))
+names(tmp) <- c("Variety", "Missing", "Freq")
+mfig <- ggplot(tmp, aes(x = Variety, y = Freq, fill = Missing)) +
+        geom_bar(position = "stack", stat = "identity")
+mfig + ggtitle("Missing Price Values by Main Variety")
+```
+
+Yep: next to impossible to see the blue missing values, let alone see differences among them.
+
+
+There is an entire CRAN Task View of packages for exploring, identifying, and imputing values for missing values:
+https://cran.r-project.org/web/views/MissingData.html
+Note that several packages have tests for "missing at random" vs nonrandom or informative/biased missing values, although they haven't been applicable to my situations so far.
+
+
+
+##  Distributions of Categorical (Factor) Values
+
+A histogram or bar chart is the obvious way to visualize the relative frequencies of occurrence of discrete categorical values.  The frequency axis should always start at 0, not at some positive value lower than the lowest frequency.  That not only gives differences between bar heights the proper context, it also means that the summed bar heights or total filled in area of a subgroup's histogram indicates the total sample size in that subgroup.  
+
+If there are many groups, and groups have longish names, consider turning the histogram sideways to show the labels.  And, the default alphabetical order is almost always an uninformative waste of an axis.  If the factor levels are sites, perhaps order them North to South.  At the least, order the factor levels by something like frequencies.
+
+```{r hist2}
+tmp <- plyr::count(wine, "variety")
+# str(tmp)
+tmp <- tmp[order(tmp$freq),]
+tmp$variety <- factor(tmp$variety, levels = as.character(tmp$variety), ordered = TRUE)
+tmp
+hfig <- ggplot(tmp, aes(x = freq, y = variety)) +
+        geom_bar(stat = "identity") +
+        ggtitle("Counts of Wines in the Sample by Main Variety")
+hfig
+```
+
+In order to compare multiple groups, we need to use colors or subplots (faceting) to indicate groups to compare.  Neither work well for more than a very small number of groups.  Colors require some way of preventing longer bars from hiding shorter bars: either semi-transparent colors or offset bars.
+
+
+### Histograms by Groups
+
+Histograms don't work very well for comparing distributions across groups.  The X and Y axes are committed to values and frequencies, so groups need to be represented by colors or facetting.
+
+### Colors
+
+Colors can work for histograms, but only for a very few groups.  In order to not have shorter bars of one group hidden behind longer bars of another, the possibilities are to use semi-transparent colors via alpha = 0.6, or put the bars side by side via position = "dodge".
+
+```{r col1, collapse = TRUE}
+Dwine1 <- ggplot(wine[!is.na(wine$price) & wine$price < 100,], 
+                 aes(x = price, fill = variety_main, color = variety_main)) +
+         geom_histogram(bins = 25, position = "dodge")
+Dwine1
+
+Dwine2 <- ggplot(wine[!is.na(wine$price) & wine$price < 100,], 
+                 aes(x = price, color = variety_main)) +
+         geom_density(adjust = 2, size = 1)
+Dwine2
+
+```
+
+
+
+
+
+## 
+
+```{r col2, collapse = TRUE}
+Dwine1 <- ggplot(wine[!is.na(wine$price) & wine$price < 100,], 
+                 aes(x = price, fill = variety_main, color = variety_main)) +
+         geom_histogram(bins = 25, position = "dodge")
+Dwine1
+
+Dwine2 <- ggplot(wine[!is.na(wine$price) & wine$price < 100,], 
+                 aes(x = price, color = variety_main)) +
+         geom_density(adjust = 2, size = 1)
+Dwine2
+
+```
+
+
+
+There's a lot involved in choice of color palette: color vision deficiency, whether the groups are ordered, paired, diverging, etc..  That may get discussed if this content migrates to a data visualization page. 
+
+
+### Faceting
+
+Faceting is the ggplot / "grammar of graphics" name for Cleveland's "trellis" array of subplots, which became "lattice" in that R graphics package.  In some places it goes by the name "small multiples".  In ggplot, it is possible to request a ribbon of subplots, one for each level of a single factor, or for each combination of levels from more than one factor.  Alternatively, one can specify a matrix of subplots, with rows and columns each defined by unique combinations of one or more factors.
+
+One key to effective faceting is to align subplots so that the pattern of interest lines up.  If the pattern is shifts along the X axis, the facets should be stacked in a column so the X axis aligns,  If the pattern is the heights of the highest bars on the Y axis, the facets should be in a row so that the Y axes align.  And, if the facets are sites, the site names might be ordered so that the site subplots fall in approximate geographic orientation on the page.  The key is not necessarily creativity, but rather thought about what makes the patterns of interest easiest to perceive.
+
+```{r fac, collapse = TRUE, fig.height = 10, fig.width = 8}
+Fwine1 <- ggplot(wine[!is.na(wine$price) & wine$price < 100,], 
+                 aes(x = price, fill = variety_main, color = variety_main)) +
+         geom_histogram(bins = 25) +
+         facet_wrap("variety_main", ncol = 1)
+Fwine1
+
+```
+
+
+
+
+
+## Distributions of Continuous (numeric) Values
+
+There are several good ways of visualizing a distribution.  They emphasize differnt aspects of distributions, and thus are most appropriate for different forms of distributions.  I often have to look at more than one visualization before understanding which is most appropriate.  Boxplots, Kernelled Density Plots, and Histograms are covered in the "Visualizations: Distributions" page.
+
+
+### Boxplot:
+
+Tukey's classic boxplot shows median, boxes to the quartiles (25th & 75% percentiles), and whiskers (lines) to the max & min. This is a visual display of his "5 numbers" description of the distribution of a quantitative variable.  Modern modifications may cut the whiskers short if there are gaps or odd shapes (compared against extreme value distribution theory), then show those outliers as dots.  The most common cutoff is (1.5 * IQR) beyond the quartile, where IQR is the interquartile range: the difference between the 25th & 75th percentiles.  The full range is then not to the end of the whisker but to the most extreme dot, and the figure indicates a longer, skinnier tail of the distribution.  
+
+Another modification is to indicate the sample size for that subgroup by the width of the box.  That can be slightly misleading, as our eyes perceive differences in the area of the box, not the width per se, so sample sizes get mis-perceived if the interquartile ranges (box heights) differ greatly between subgroups.  
+
+Also, boxplots are much better at representing unimodal distributions: bimodal distributions get masked.  Another variation of a boxplot is a violin plot, which uses kernelled pdfs (see below) for the sides of the box.
+
+```{r box1}
+figb <- ggplot(wine, aes(x = variety_main, y = price)) +
+  geom_boxplot()
+figb
+
+```
+
+That's an ugly boxplot: certainly not what they look like in testbooks!  But that's immediately informative: While there are expensives wines of each varietal, there are some astronomically expensive Pinot Noirs.  I don't know wines because I don't drink wines, so I ahve no reason to suspect those anomalous high prices are errors.  Instead, they lead me to think about how I will analyze these data to extract information from them.  Are comparisons of averages going to be meaningful, given the large influence of the few very expensive bottles?  Would median prices be more meaningful to compare among groups?  And, if my information of interest is really going to be the price as a function of the rating, what influence will those extremely expensive bottles have?
+
+Just to show what a more usual boxplot looks like, here's the same thing for only bottles under $100:
+
+```{r box1b}
+figbb <- ggplot(wine[wine$price < 100 & !is.na(wine$price),], aes(x = variety_main, y = price)) +
+  geom_boxplot()
+figbb
+
+```
+
+
+And here's a variant with box widths proportional to the square-root of the sample sizes:
+
+```{r box1bb, message = FALSE, warning = FALSE}
+figbbw <- ggplot(wine[wine$price < 100 & !is.na(wine$price),], aes(x = variety_main, y = price)) + 
+          geom_boxplot(varwidth = TRUE)
+figbbw
+```
+
+Finally, for completeness, here's the violin plot variant, which I expect to be more teardrop than double-moded:
+
+
+```{r box1bbb, message = FALSE, warning = FALSE}
+figbbv <- ggplot(wine[wine$price < 100 & !is.na(wine$price),], aes(x = variety_main, y = price)) + 
+          geom_violin(draw_quantiles = c(.25, .5, .75))
+figbbv
+```
+
+
+### Histogram:
+
+Histograms are also often generated for numeric variables by binning values into categories.  However, for the same data, the histogram can look very different not only for different bin-widths, but even for constant bin widths but shifting the offset for the cut-points.
+
+```{r hist3, collapse = TRUE}
+hfig3 <- ggplot(wine, aes(x = price)) +
+         geom_histogram(bins = 10)
+hfig3
+
+hfig4 <- ggplot(wine, aes(x = price)) +
+         geom_histogram(bins = 25)
+hfig4
+
+hfig5 <- ggplot(wine, aes(x = price)) +
+         geom_histogram(bins = 50)
+hfig5
+```
+
+
+Finally, because we'll use it in the next section, here's histograms of the Old Faithful eruption data:
+
+
+```{r histOF, collapse = TRUE}
+# Azzalini and Bowman (1990) Old Faithful eruptions from the MASS package 
+OFh1 <- ggplot(geyser, aes(x = waiting)) +
+         geom_histogram() + # default bins = 30
+        ggtitle("Old Faithful Eruption Durations Aug 1-15, 1985")
+OFh1
+OFh2 <- ggplot(geyser, aes(x = waiting)) +
+         geom_histogram(bins = 20) + # default bins = 30
+        ggtitle("Old Faithful Eruption Durations Aug 1-15, 1985")
+OFh2
+OFh3 <- ggplot(geyser, aes(x = waiting)) +
+         geom_histogram(bins = 50) + # default bins = 30
+        ggtitle("Old Faithful Eruption Durations Aug 1-15, 1985")
+OFh3
+OFh4 <- ggplot(geyser, aes(x = waiting)) +
+         geom_histogram(breaks = seq(40, 110, by = 2)) + 
+        ggtitle("Old Faithful Eruption Durations Aug 1-15, 1985")
+OFh4
+OFh5 <- ggplot(geyser, aes(x = waiting)) +
+         geom_histogram(breaks = seq(41, 111, by = 2)) + 
+        ggtitle("Old Faithful Eruption Durations Aug 1-15, 1985")
+OFh5
+
+
+# table(geyser$waiting %% 2 == 0)
+# table(geyser$waiting %% 5 == 0)
+```
+Note that the last 2 graphs have the same number of bins, but their bins are offset by 1 minute.
+
+
+### Probability Density Function:
+For numeric variables, a probability density function can be thought of as the histogram with an infinite sample size, and infinitely narrow bins.  Therefore, a pdf has the advantage of eliminating the arbitrary distortions of histogram bin width and offset.  Because probabilities sum to 1, the area under a true pdf integrates to 1.  That means that the units of probability on the Y axis are somewhat arbitrary, scaled to the units of the X axis so that the integral is 1.  So if the X axis is in cm vs m, the Y axis will have 100x difference in its values.  For visualizations, the alternative is to have the area under the curve integrate to the sample size 1, which makes the units of the Y axis "frequency".
+
+PDFs are generated by creating a "kernel" (bump) with area 1/N centered on each value, then summing (integrating) the bumps.  The shape of the bump can vary, but in general a parabola (Epanechnikov) shape is slightly better than Cosine, Gaussian, or other shapes.  For a given shape, a bandwidth determines how tall and narrow vs low and wide each bump is.  There are many ways to automatically choose an appropriate bandwidth.  "Silverman's Rule of Thumb" (SROT) is usually good enough for EDA visualizations, but boostrap crossvalidation can be used if the pdf will be subsequently used to sample from.
+The classic example for illustrating kernel density estimation is Old Faithful eruption waiting times and durations, although Silverman's Density Estimation book uses data from a different source and some time in the 1970s.
+
+The geom_density() function in ggplot2 defaults to a Gaussian kernel, which is fine.  I prefer the slightly more efficient Epanechnikov kernel, so the code below overrides the default kernel.
+
+```{r pdfOF, collapse = TRUE}
+# Azzalini and Bowman (1990) Old Faithful eruptions from the MASS package 
+OFpdf1 <- ggplot(geyser, aes(x = waiting)) +
+         geom_density(kernel = "epanechnikov") + 
+        ggtitle("Old Faithful Eruption Durations Aug 1-15, 1985\nRule of Thumb Smoothed")
+OFpdf1
+
+OFpdf2 <- ggplot(geyser, aes(x = waiting)) +
+         geom_density(kernel = "epanechnikov", adjust = 0.5) + 
+        ggtitle("Old Faithful Eruption Durations Aug 1-15, 1985\nUndersmoothed")
+OFpdf2
+
+OFpdf3 <- ggplot(geyser, aes(x = waiting)) +
+         geom_density(kernel = "epanechnikov", adjust = 2) + 
+        ggtitle("Old Faithful Eruption Durations Aug 1-15, 1985\nOversmoothed")
+OFpdf3
+
+# table(geyser$waiting %% 2 == 0)
+# table(geyser$waiting %% 5 == 0)
+```
+
+And, of course, it is relatively easy to overlay a kernel pdf over a histogram. The only trick is the y axis scaling.  By default it is probability, so the area under the curve integrates to 1. When we overlay to a histogram, we need the Y axis to be count or frequency.  But the bins are the counts of all values in the bin, so we need to further account for bin width. The code below lets you change the bin width bw.   
+
+```{r distX}
+
+bw = 3
+OFcomb <- ggplot(geyser, aes(x = waiting)) +
+         geom_histogram(aes(y = ..count.. / bw), binwidth = bw, 
+                        color = "black", fill = NA) + 
+         geom_density(aes(y = ..density.. * nrow(geyser)), kernel = "epanechnikov") +
+         xlab("Waiting Time Between Rruptions") +
+         ylab("Count") +
+        ggtitle("Old Faithful Eruption Durations Aug 1-15, 1985")
+OFcomb
+
+```
+
+## Grouping
+
+The above are just the elements.  This page is supposed to be about comparing groups or slices based on other variables.  We have that for the boxplots and variants: aes(x = grouping, y = VariableOfInterest).  For these other visualizations, we need to map the grouping variable to another element or aesthetic.  The logical options are colors and faceting or sub-graphs.
+
+### Colors
+
+Colors can work for histograms, but only for a very few groups.  For histograms, in order to not have shorter bars of one group hidden behind longer bars of another, the possibilities are to use semi-transparent colors via alpha = 0.6, or put the bars side by side via position = "dodge".
+
+Colors work well for density plots, as each can be a line.  
+
+```{r xcol1, collapse = TRUE}
+Dwine1 <- ggplot(wine[!is.na(wine$price) & wine$price < 100,], 
+                 aes(x = price, fill = variety_main, color = variety_main)) +
+         geom_histogram(bins = 25, position = "dodge")
+Dwine1
+
+Dwine2 <- ggplot(wine[!is.na(wine$price) & wine$price < 100,], 
+                 aes(x = price, color = variety_main)) +
+         geom_density(adjust = 2, size = 1)
+Dwine2
+
+```
+
+There's a lot involved in choice of color palette: color vision deficiency, whether the groups are ordered, paired, diverging, etc..  That may get discussed if this content migrates to a data visualization page. 
+
+
+### Faceting
+
+Faceting is the ggplot / "grammar of graphics" name for Cleveland's "trellis" array of subplots, which became "lattice" in that R graphics package.  In some places it goes by the name "small multiples".  In ggplot, it is possible to request a ribbon of subplots, one for each level of a single factor, or for each combination of levels from more than one factor.  Alternatively, one can specify a matrix of subplots, with rows and columns each defined by unique combinations of one or more factors.
+
+One key to effective faceting is to align subplots so that the pattern of interest lines up.  If the pattern is shifts along the X axis, the facets should be stacked in a column so the X axis aligns,  If the pattern is the heights of the highest bars on the Y axis, the facets should be in a row so that the Y axes align.  And, if the facets are sites, the site names might be ordered so that the site subplots fall in approximate geographic orientation on the page.  The key is not necessarily creativity, but rather thought about what makes the patterns of interest easiest to perceive.
+
+```{r facx, collapse = TRUE, fig.height = 10, fig.width = 8}
+Fwine1 <- ggplot(wine[!is.na(wine$price) & wine$price < 100,], 
+                 aes(x = price, fill = variety_main, color = variety_main)) +
+         geom_histogram(bins = 25) +
+         facet_wrap("variety_main", ncol = 1)
+Fwine1
+
+```
+
+
+
+
+## Examples
+
+As a more realistic example, we can apply some of the above to the seedlings dataset.  In EDA0 we ran dataMaid on this dataset, and found no missing values.
+
+```{r seed1}
+cat("\n\n\nHow many missing values in each variable?\n")
+colSums(is.na(seedlings))
+```
+
+
+Now, we can start with boxplots of seedlings.  Because seedlings were counted in different sized-areas, graphing raw seedling counts will confound seedling density variation with subplot area variation.  Therefore, even though the analyses should be performed on the counts, with subplot area as an "offset" (covariate with a fixed slope of 1), it is better to graph Density_ha, broken out by plot and by species. 
+
+```{r seed2, message = FALSE, warning = FALSE}
+figbbw <- ggplot(seedlings, aes(x = Species.Symbol, y = Density_ha)) +  
+          geom_boxplot(varwidth = TRUE)
+figbbw
+```
+
+OK, 2 outliers of very high density Ponderosa Pine seedlings.  200k / ha is ~ 20 m^-2^ so plausible: even I've seen such carpets, especially of young of year seedlings. 
+
+
+```{r seed3, message = FALSE, warning = FALSE}
+figbbw2 <- ggplot(seedlings, aes(x = MacroPlot.Name, y = Density_ha)) +  
+          geom_boxplot(varwidth = TRUE)
+figbbw2
+```
+
+That's even uglier, but both high values were in the same plot, and it appears that the same plot also has years with normal numbers of PIPO seedlings.  So, let's quickly look at PIPO in that plot, and see what the top 20 density values are.
+
+
+```{r bigPIPO}
+PPplot <- seedlings[seedlings$Density_ha > 50000,]
+PPplot
+
+
+cat ("\n\n\n")
+# For this dataset I can just sort the dataframe.  If there were 100M or more records, I'd first 
+# subset the data by Density_ha < 10000.
+hiDens <- seedlings[order(seedlings$Density_ha, decreasing = TRUE),]
+hiDens[1:20,]
+
+
+
+```
+
+
+## Packages
+
+
+## References
+
+
+## Appendix2: R Code Listing
+
+```{r Listing, ref.label=knitr::all_labels() ,echo=TRUE, eval=FALSE}
+```
+
